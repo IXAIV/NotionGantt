@@ -7,12 +7,12 @@ from notion_client import Client
 from datetime import timedelta
 
 # --- 1. 설정 및 초기화 ---
-NOTION_TOKEN = "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"
-DATABASE_ID = "22ade43458148015b875d2d090e06d1c"
+notion_token=st.secrets["NOTION_TOKEN"]
+db_id=st.secrets["DATABASE_ID"]
 
 st.set_page_config(layout="wide", page_title="프로젝트 마일스톤 타임라인")
 
-notion = Client(auth=NOTION_TOKEN)
+notion = Client(auth=notion_token)
 
 # --- 2. Notion 데이터 가져오기 ---
 def get_notion_database_data(database_id: str) -> list:
@@ -207,11 +207,11 @@ def create_timeline_chart(df: pd.DataFrame) -> go.Figure:
 
 # --- 6. Streamlit 앱 실행 로직 ---
 if __name__ == "__main__":
-    if not NOTION_TOKEN or not DATABASE_ID:
+    if not notion_token or not db_id:
         st.error("Notion API 토큰 또는 데이터베이스 ID가 설정되지 않았습니다.")
-        st.info("`NOTION_TOKEN`과 `DATABASE_ID` 변수를 올바르게 설정해주세요.")
+        st.info("`notion_token`과 `db_id` 변수를 올바르게 설정해주세요.")
     else:
-        raw_notion_data = get_notion_database_data(DATABASE_ID)
+        raw_notion_data = get_notion_database_data(db_id)
 
         if raw_notion_data:
             df_processed = process_notion_data(raw_notion_data)
