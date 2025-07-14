@@ -22,7 +22,7 @@ notion = Client(auth=notion_token)
 def get_notion_database_data(database_id: str) -> list:
     """
     지정된 Notion 데이터베이스에서 모든 페이지(항목) 데이터를 가져옵니다.
-    데이터는 '프로젝트 이름' 속성을 기준으로 오름차순으로 정렬됩니다.
+    데이터는 '이름' 속성을 기준으로 오름차순으로 정렬됩니다.
     API 호출 중 오류가 발생하면 오류 메시지를 표시하고 빈 리스트를 반환합니다.
     """
     all_results = []
@@ -35,7 +35,7 @@ def get_notion_database_data(database_id: str) -> list:
                 database_id=database_id,
                 start_cursor=start_cursor,
                 sorts=[
-                    {"property": "프로젝트 이름", "direction": "ascending"} # '프로젝트 이름'으로 오름차순 정렬
+                    {"property": "이름", "direction": "ascending"} # '이름'으로 오름차순 정렬
                 ]
             )
             all_results.extend(response["results"]) # 가져온 결과를 전체 리스트에 추가합니다.
@@ -50,44 +50,63 @@ def get_notion_database_data(database_id: str) -> list:
             return [] # 오류 발생 시 빈 리스트를 반환하여 처리합니다.
     return all_results # 모든 데이터를 반환합니다.
 
+def get_page_title_by_id(page_id: str) -> str:
+    try:
+        page = notion.pages.retrieve(page_id=page_id)
+        title_prop = page["properties"].get("Project", {}).get("title",[])
+        if title_prop:
+            return title_prop[0]["plain_text"]
+        else:
+            return "이름 없음"
+    except Exception as e:
+        st.warning(f"project DB 이름 조회 실패: {e}")
+        return "이름 없음"
+
 # --- 3. Notion 데이터 가공 ---
 def process_notion_data(notion_pages: list) -> pd.DataFrame:
     """
     가져온 Notion 페이지 데이터를 분석 및 시각화에 적합한 Pandas DataFrame으로 가공합니다.
-    - 각 항목에서 '프로젝트 이름', '종료일', '상태', '상위 항목 ID'를 추출합니다.
-    - '프로젝트 이름'이 "이름 없음"인 항목은 데이터 처리에서 제외합니다.
-    - '종료일'은 날짜/시간(datetime) 객체로 변환하며, 유효하지 않은 날짜는 NaT(Not a Time)로 처리합니다.
+    - 각 항목에서 '이름', '타임라인', '상태', '상위 항목 ID'를 추출합니다.
+    - '이름'이 "이름 없음"인 항목은 데이터 처리에서 제외합니다.
+    - '타임라인'은 날짜/시간(datetime) 객체로 변환하며, 유효하지 않은 날짜는 NaT(Not a Time)로 처리합니다.
     """
     processed_items = []
     for item in notion_pages:
         properties = item.get("properties", {}) # Notion 페이지의 속성 정보를 가져옵니다.
 
-        # '프로젝트 이름' 속성 (Title 타입)을 추출합니다.
-        name_prop = properties.get("프로젝트 이름", {}).get("title", [])
+        # '이름' 속성 (Title 타입)을 추출합니다.
+        name_prop = properties.get("이름", {}).get("title", [])
         project_name = name_prop[0]["plain_text"] if name_prop else "이름 없음"
-
-        # '이름 없음'으로 지정된 항목은 타임라인 시각화에서 제외합니다.
-        if project_name == "이름 없음":
-            continue
-
-        # '종료일' 속성 (Date 타입)의 'start' 필드를 추출합니다.
-        end_date_obj = properties.get("종료일", {}).get("date")
-        end_date = end_date_obj["start"] if end_date_obj and "start" in end_date_obj else None
-        
-        # '상태' 속성 (Status 또는 Select 타입)을 추출합니다.
-        status_prop = properties.get("상태", {})
-        status = status_prop.get("status", {}).get("name") if status_prop.get("type") == "status" else \
-                 status_prop.get("select", {}).get("name") if status_prop.get("type") == "select" else "미정"
 
         # '상위 항목' 관계 속성 (Relation 타입)을 추출하여 부모 ID를 가져옵니다.
         parent_relation_prop = properties.get("상위 항목", {}).get("relation", [])
         parent_id = parent_relation_prop[0]["id"] if parent_relation_prop else None
 
+        # 최상위 항목이면 project DB 이름으로 대체
+        if parent_id is None:
+            project_db_relation = properties.get("🏠 Project DB", {}).get("relation", [])
+            if project_db_relation:
+                project_db_id = project_db_relation[0]["id"]
+                project_name = get_page_title_by_id(project_db_id)
+
+        # '이름 없음'으로 지정된 항목은 타임라인 시각화에서 제외합니다.
+        if project_name == "이름 없음":
+            continue
+
+        # '타임라인' 속성 (Date 타입)의 'start' 필드를 추출합니다.
+        end_date_obj = properties.get("타임라인", {}).get("date")
+        end_date = end_date_obj["start"] if end_date_obj and "start" in end_date_obj else None
+        
+        # '상태' 속성 (Status 또는 Select 타입)을 추출합니다.
+        status_prop = properties.get("진행 상태", {})
+        status = status_prop.get("status", {}).get("name") if status_prop.get("type") == "status" else \
+                 status_prop.get("select", {}).get("name") if status_prop.get("type") == "select" else "미정"
+
         # 가공된 데이터를 리스트에 추가합니다.
         processed_items.append({
             "id": item["id"],
             "이름": project_name,
-            "종료일": end_date,
+            "타임라인": end_date,
             "상태": status,
             "상위 항목 ID": parent_id,
         })
@@ -95,16 +114,16 @@ def process_notion_data(notion_pages: list) -> pd.DataFrame:
     # 가공된 아이템 리스트를 Pandas DataFrame으로 변환합니다.
     df = pd.DataFrame(processed_items)
     
-    # '종료일' 컬럼을 datetime 형식으로 변환합니다. 변환 중 오류가 발생하면 해당 값을 NaT로 처리합니다.
-    df["종료일"] = pd.to_datetime(df["종료일"], errors='coerce')
+    # '타임라인' 컬럼을 datetime 형식으로 변환합니다. 변환 중 오류가 발생하면 해당 값을 NaT로 처리합니다.
+    df["타임라인"] = pd.to_datetime(df["타임라인"], errors='coerce')
     
     return df # 가공된 DataFrame을 반환합니다.
 
 # --- 4. 하위 태스크 데이터 수집 ---
 def get_descendant_end_details(task_id: str, df_all_tasks_indexed: pd.DataFrame, parent_child_map: dict) -> list:
     """
-    주어진 `task_id`에 해당하는 상위 태스크의 모든 하위(자식, 손자 등) 태스크의 종료일과 세부 정보를 재귀적으로 수집합니다.
-    이 함수는 최상위 태스크 자체의 종료일은 포함하지 않고, 오직 그 하위 태스크만 탐색합니다.
+    주어진 `task_id`에 해당하는 상위 태스크의 모든 하위(자식, 손자 등) 태스크의 타임라인과 세부 정보를 재귀적으로 수집합니다.
+    이 함수는 최상위 태스크 자체의 타임라인은 포함하지 않고, 오직 그 하위 태스크만 탐색합니다.
     `df_all_tasks_indexed`는 'id'를 인덱스로 설정한 DataFrame으로, 효율적인 데이터 조회를 위해 사용됩니다.
     """
     descendant_details = []
@@ -119,10 +138,10 @@ def get_descendant_end_details(task_id: str, df_all_tasks_indexed: pd.DataFrame,
                 # 만약 자식 ID가 DataFrame에 없으면 (예: "이름 없음"으로 필터링된 경우) 빈 DataFrame으로 처리합니다.
                 child_task = pd.DataFrame() 
 
-            # 자식 태스크 데이터가 존재하고 '종료일'이 유효한 경우, 세부 정보를 추가합니다.
-            if not child_task.empty and pd.notna(child_task["종료일"].iloc[0]):
+            # 자식 태스크 데이터가 존재하고 '타임라인'이 유효한 경우, 세부 정보를 추가합니다.
+            if not child_task.empty and pd.notna(child_task["타임라인"].iloc[0]):
                 descendant_details.append({
-                    'date': child_task["종료일"].iloc[0],
+                    'date': child_task["타임라인"].iloc[0],
                     'name': child_task["이름"].iloc[0],
                     'status': child_task["상태"].iloc[0]
                 })
@@ -136,12 +155,12 @@ def create_timeline_chart(df: pd.DataFrame) -> go.Figure:
     """
     가공된 Pandas DataFrame을 사용하여 Plotly의 점 연결 타임라인 차트(Gantt 차트와 유사)를 생성합니다.
     - **Y축**: Notion 데이터베이스에서 '상위 항목' 관계가 없는 **최상위 프로젝트의 이름**을 표시합니다.
-    - **점과 선**: 각 최상위 프로젝트에 속한 **하위 태스크들의 종료일**이 점으로 표시되며, 이 점들은 선으로 연결됩니다.
-    - **X축(날짜)**: 모든 하위 태스크의 종료일을 기반으로 자동으로 범위가 설정됩니다.
+    - **점과 선**: 각 최상위 프로젝트에 속한 **하위 태스크들의 타임라인**이 점으로 표시되며, 이 점들은 선으로 연결됩니다.
+    - **X축(날짜)**: 모든 하위 태스크의 타임라인을 기반으로 자동으로 범위가 설정됩니다.
     - **가독성**: X축 및 Y축의 제목과 라벨 폰트 크기를 조정하여 가독성을 높입니다.
     - **색상**: 동일한 하위 항목 이름에는 같은 색상이 적용되어 시각적으로 구분하기 쉽습니다.
     - **상시 표시 텍스트**: 각 점 옆에는 해당 하위 항목의 이름과 날짜가 항상 표시됩니다.
-    - **호버 정보**: 마우스 커서를 점에 올리면(호버) 상위 프로젝트 이름, 하위 태스크 이름, 그리고 정확한 날짜가 상세하게 표시됩니다.
+    - **호버 정보**: 마우스 커서를 점에 올리면(호버) 상위 이름, 하위 태스크 이름, 그리고 정확한 날짜가 상세하게 표시됩니다.
     """
     # '상위 항목 ID'가 없는 항목들을 최상위 프로젝트로 간주하고 복사본을 생성합니다.
     top_level_tasks = df[df["상위 항목 ID"].isnull()].copy()
@@ -158,20 +177,20 @@ def create_timeline_chart(df: pd.DataFrame) -> go.Figure:
         if pd.notna(row["상위 항목 ID"]) and row["상위 항목 ID"] in df['id'].values:
             parent_child_map.setdefault(row["상위 항목 ID"], []).append(row["id"])
 
-    all_descendant_end_dates = [] # 모든 하위 태스크의 종료일을 저장할 리스트
+    all_descendant_end_dates = [] # 모든 하위 태스크의 타임라인을 저장할 리스트
     df_indexed_by_id = df.set_index('id') # 'id'를 인덱스로 설정하여 데이터 조회 성능을 높입니다.
 
-    # 모든 최상위 프로젝트에 대해 하위 태스크의 종료일을 수집합니다.
+    # 모든 최상위 프로젝트에 대해 하위 태스크의 타임라인을 수집합니다.
     for _, top_task in top_level_tasks.iterrows():
         top_task_id = top_task["id"]
         descendant_details = get_descendant_end_details(top_task_id, df_indexed_by_id, parent_child_map)
         all_descendant_end_dates.extend([d['date'] for d in descendant_details])
 
-    # 유효한(NaT가 아닌) 종료일만 필터링하여 X축 범위 계산에 사용합니다.
+    # 유효한(NaT가 아닌) 타임라인만 필터링하여 X축 범위 계산에 사용합니다.
     valid_end_dates = pd.Series(all_descendant_end_dates).dropna()
 
     # X축(날짜) 범위의 최소값과 최대값을 설정합니다.
-    # 유효한 종료일이 없는 경우, 현재 날짜를 기준으로 기본 범위를 설정합니다.
+    # 유효한 타임라인이 없는 경우, 현재 날짜를 기준으로 기본 범위를 설정합니다.
     min_date = valid_end_dates.min() if not valid_end_dates.empty else pd.Timestamp.now() - timedelta(days=30)
     max_date = valid_end_dates.max() if not valid_end_dates.empty else pd.Timestamp.now() + timedelta(days=30)
     
@@ -188,12 +207,12 @@ def create_timeline_chart(df: pd.DataFrame) -> go.Figure:
         color_map[name] = plotly_qualitative_colors[i % len(plotly_qualitative_colors)]
 
     # --- Y축 라벨 간격 및 위치 제어 설정 ---
-    # 각 프로젝트 이름에 고유한 Y축 숫자 값을 매핑합니다.
+    # 각 이름에 고유한 Y축 숫자 값을 매핑합니다.
     # 이 숫자 값의 간격(`y_axis_spacing_factor`)이 Y축 라벨의 시각적 간격을 결정합니다.
     # `y_axis_spacing_factor`를 조절하여 Y축 라벨 사이의 세로 간격을 조정할 수 있습니다.
     y_axis_spacing_factor = 20.0 # 간격 계수: 1.0이 기본 간격, 값이 커질수록 라벨 간격이 넓어집니다.
 
-    # Y축 라벨(프로젝트 이름)에 대한 숫자 매핑 딕셔너리를 생성합니다.
+    # Y축 라벨(이름)에 대한 숫자 매핑 딕셔너리를 생성합니다.
     y_axis_map = {name: i * y_axis_spacing_factor for i, name in enumerate(top_level_tasks["이름"].tolist())} 
 
     # Plotly Y축에 실제로 표시될 숫자 값(`y_tickvals`)과 그에 대응하는 텍스트 라벨(`y_ticktext`)을 생성합니다.
@@ -217,7 +236,7 @@ def create_timeline_chart(df: pd.DataFrame) -> go.Figure:
         top_task_id = top_task["id"]
         top_task_name = top_task["이름"] # 현재 최상위 프로젝트의 이름
 
-        # 현재 최상위 프로젝트에 속한 모든 하위 태스크의 상세 종료일 정보를 가져옵니다.
+        # 현재 최상위 프로젝트에 속한 모든 하위 태스크의 상세 타임라인 정보를 가져옵니다.
         descendant_end_details = get_descendant_end_details(top_task_id, df_indexed_by_id, parent_child_map)
         
         if descendant_end_details: # 하위 태스크가 존재하는 경우에만 차트에 추가합니다.
@@ -257,7 +276,7 @@ def create_timeline_chart(df: pd.DataFrame) -> go.Figure:
                         line=dict(width=1, color='DarkSlateGrey') # 마커 테두리 색상
                     ),
                     line=dict(color='DarkSlateGrey', width=5), # 선의 색상과 두께 설정
-                    name=f"{top_task_name} 하위 종료일", # 이 트레이스의 이름 (범례에 표시 안됨)
+                    name=f"{top_task_name} 하위 타임라인", # 이 트레이스의 이름 (범례에 표시 안됨)
                     text=point_texts, # 각 점 옆에 표시될 텍스트
                     textposition='bottom center', # 텍스트 위치를 점 아래 중앙으로 설정
                     hoverinfo='text', # 호버 시 'hovertext' 속성만 표시
@@ -291,7 +310,7 @@ def create_timeline_chart(df: pd.DataFrame) -> go.Figure:
             type='linear', # Y축 타입을 'linear' (선형)으로 설정 (숫자 값 사용에 적합)
             tickmode='array', # 틱 값과 텍스트를 배열로 제공하여 수동 설정
             tickvals=y_tickvals, # 수동으로 생성한 틱 값 (숫자)
-            ticktext=y_ticktext, # 수동으로 생성한 틱 텍스트 (프로젝트 이름)
+            ticktext=y_ticktext, # 수동으로 생성한 틱 텍스트 (이름)
             range=[y_range_min, y_range_max], # Y축 범위 설정 (최소값, 최대값)
             fixedrange=True, # 사용자가 Y축 범위를 스크롤/확대/축소할 수 없도록 고정
         ),
