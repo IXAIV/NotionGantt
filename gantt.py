@@ -7,7 +7,6 @@ from notion_client import Client
 from datetime import timedelta
 
 # --- 1. 설정 및 초기화 ---
-# Streamlit Secrets에서 API 토큰과 DB ID를 안전하게 가져옵니다.
 notion_token = st.secrets["NOTION_TOKEN"]
 db_id = st.secrets["DATABASE_ID"]
 
@@ -16,6 +15,13 @@ st.set_page_config(layout="wide", page_title="프로젝트 마일스톤 타임�
 
 # Notion API 클라이언트 인스턴스를 인증 토큰으로 초기화합니다.
 notion = Client(auth=notion_token)
+
+# Plotly 설정 (경고 제거 및 기본 설정)
+plotly_config = {
+    'displaylogo': False,  # Plotly 로고 숨기기
+    'displayModeBar': True, # 차트 상단 툴바 표시
+    'responsive': True     # 반응형 크기 조정
+}
 
 # --- 2. Notion 데이터 가져오기 (캐시 적용) ---
 @st.cache_data(ttl=600) # 10분마다 데이터를 새로고침
@@ -115,7 +121,7 @@ def process_notion_data(notion_pages: list) -> pd.DataFrame:
     
     return df
 
-# --- 4. 하위 태스크 데이터 수집 ---
+# --- 5. 하위 태스크 데이터 수집 ---
 def get_descendant_end_details(task_id: str, df_all_tasks_indexed: pd.DataFrame, parent_child_map: dict) -> list:
     descendant_details = []
     
@@ -132,12 +138,11 @@ def get_descendant_end_details(task_id: str, df_all_tasks_indexed: pd.DataFrame,
                     'name': child_task["이름"].iloc[0],
                     'status': child_task["상태"].iloc[0]
                 })
-            # --- 수정된 부분: 재귀 호출 시 df_all_tasks_indexed 인수를 전달 ---
             descendant_details.extend(get_descendant_end_details(child_id, df_all_tasks_indexed, parent_child_map))
             
     return descendant_details
 
-# --- 5. 타임라인 차트 생성 ---
+# --- 6. 타임라인 차트 생성 ---
 def create_timeline_chart(df_filtered: pd.DataFrame, df_full_data: pd.DataFrame) -> go.Figure:
     """
     필터링된 데이터를 사용하여 타임라인 차트를 생성하고, 최상위 항목의 '구분'에 따라 색상을 적용합니다.
@@ -174,7 +179,6 @@ def create_timeline_chart(df_filtered: pd.DataFrame, df_full_data: pd.DataFrame)
 
     for _, top_task in top_level_tasks.iterrows():
         top_task_id = top_task["id"]
-        # --- 수정된 부분: df_indexed_by_id 전달 ---
         descendant_details = get_descendant_end_details(top_task_id, df_indexed_by_id, parent_child_map)
         all_descendant_end_dates.extend([d['date'] for d in descendant_details])
 
@@ -182,7 +186,7 @@ def create_timeline_chart(df_filtered: pd.DataFrame, df_full_data: pd.DataFrame)
     min_date = valid_end_dates.min() if not valid_end_dates.empty else pd.Timestamp.now() - timedelta(days=30)
     max_date = valid_end_dates.max() if not valid_end_dates.empty else pd.Timestamp.now() + timedelta(days=30)
     
-    # --- Y축 간격 확보를 위한 숫자 매핑 (간격 계수 60.0으로 재설정) ---
+    # --- Y축 간격 확보를 위한 숫자 매핑 ---
     y_axis_spacing_factor = 60.0 
     y_axis_map = {name: i * y_axis_spacing_factor for i, name in enumerate(top_level_tasks["이름"].tolist())}
     y_tickvals = list(y_axis_map.values())
@@ -227,7 +231,6 @@ def create_timeline_chart(df_filtered: pd.DataFrame, df_full_data: pd.DataFrame)
         
         label_color_map[top_task_name] = line_dot_color
         
-        # --- 수정된 부분: df_indexed_by_id 전달 ---
         descendant_details = get_descendant_end_details(top_task_id, df_indexed_by_id, parent_child_map)
         
         if descendant_details:
@@ -267,7 +270,7 @@ def create_timeline_chart(df_filtered: pd.DataFrame, df_full_data: pd.DataFrame)
                 )
             )
     
-    # --- Y축 틱 텍스트에 색상 및 왼쪽 정렬 적용 ---
+    # Y축 틱 텍스트에 색상 적용 (가장 좌측 타이틀)
     colored_y_ticktext = [
         f'<span style="color:{label_color_map.get(text, "gray")};">{text}</span>'
         for text in y_ticktext
@@ -275,12 +278,14 @@ def create_timeline_chart(df_filtered: pd.DataFrame, df_full_data: pd.DataFrame)
 
     # 차트의 전체 레이아웃을 설정합니다.
     fig.update_layout(
-        template='plotly_dark', 
+        template='plotly_dark', # 전체 차트 배경을 다크 테마로 고정
         title="", 
+        # X축 제목 및 폰트 설정
         xaxis_title=dict(
             text="날짜",
             font=dict(size=20)
         ),
+        # Y축 제목 및 폰트 설정
         yaxis_title=dict(
             text="프로젝트",
             font=dict(size=20)
@@ -304,15 +309,13 @@ def create_timeline_chart(df_filtered: pd.DataFrame, df_full_data: pd.DataFrame)
             ticktext=colored_y_ticktext, 
             range=[y_range_min, y_range_max],
             fixedrange=False,
-            # Y축 라벨 간격을 늘리기 위한 최종 마진 설정
-            # automargin과 함께 l 마진을 대폭 늘려 왼쪽 공간을 확보합니다.
         ),
         margin=dict(l=150, r=20, t=20, b=20), # 좌측 마진(l) 대폭 증가
     )
 
     return fig, top_level_tasks
 
-# --- 6. Streamlit 앱 실행 로직 ---
+# --- 7. Streamlit 앱 실행 로직 ---
 if __name__ == "__main__":
     if not notion_token or not db_id:
         st.error("Streamlit Secrets(`NOTION_TOKEN`, `DATABASE_ID`)이 설정되지 않았습니다.")
@@ -370,13 +373,20 @@ if __name__ == "__main__":
                 # 필터링된 데이터를 사용하여 차트 생성
                 chart_figure, top_level_tasks_plot = create_timeline_chart(df_filtered, df_full_data) 
                 
-                # Y축 높이 동적 계산 (간격 증가에 맞춰 조정)
+                # Y축 높이 동적 계산
                 num_categories = len(top_level_tasks_plot)
                 height_per_category = 80 # Y축 간격 확보를 위해 80으로 최종 조정
                 min_chart_height = 250
                 dynamic_height = max(min_chart_height, num_categories * height_per_category)
 
-                st.plotly_chart(chart_figure, use_container_width=True, height=dynamic_height)
+                # --- Plotly config 적용 ---
+                plotly_config = {
+                    'displaylogo': False,
+                    'displayModeBar': True,
+                    'responsive': True
+                }
+                
+                st.plotly_chart(chart_figure, use_container_width=True, height=dynamic_height, config=plotly_config)
             else:
                 st.warning("선택된 필터 조건에 해당하는 프로젝트가 없습니다.")
         else:
