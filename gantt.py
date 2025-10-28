@@ -7,6 +7,8 @@ from notion_client import Client
 from datetime import timedelta
 
 # --- 1. 설정 및 초기화 ---
+# Streamlit Secrets에서 API 토큰과 DB ID를 안전하게 가져옵니다.
+
 notion_token = st.secrets["NOTION_TOKEN"]
 db_id = st.secrets["DATABASE_ID"]
 
@@ -32,6 +34,8 @@ def get_notion_database_data(database_id: str) -> list:
 
     while True:
         try:
+            # NOTE: notion.databases.query()는 올바른 호출 방식입니다. 
+            # 환경 문제로 오류가 나면 requirements.txt에 notion-client 최신 버전을 명시해야 합니다.
             response = notion.databases.query(
                 database_id=database_id,
                 start_cursor=start_cursor,
@@ -50,7 +54,7 @@ def get_notion_database_data(database_id: str) -> list:
 
 # --- 3. Project DB 이름 조회 함수 ---
 def get_page_title_by_id(page_id: str) -> str:
-    """페이지 ID를 사용하여 해당 페이지의 제목을 조회합니다. 제목 속성(Title type)을 찾아 반환합니다."""
+    """페이지 ID를 사용하여 해당 페이지의 제목을 조회합니다."""
     try:
         page = notion.pages.retrieve(page_id=page_id)
         for prop_name, prop_data in page["properties"].items():
@@ -66,8 +70,7 @@ def get_page_title_by_id(page_id: str) -> str:
 def process_notion_data(notion_pages: list) -> pd.DataFrame:
     """
     가져온 Notion 페이지 데이터를 Pandas DataFrame으로 가공합니다.
-    - 최상위 항목은 'Project DB' 관계를 통해 이름을 대체합니다.
-    - '구분' 속성을 안전하게 추출합니다.
+    - '타임라인' 컬럼이 반드시 존재하도록 보장합니다.
     """
     processed_items = []
     for item in notion_pages:
@@ -96,7 +99,7 @@ def process_notion_data(notion_pages: list) -> pd.DataFrame:
         if type_prop and type_prop.get("type") == "select":
             item_type = type_prop.get("select", {}).get("name") if type_prop.get("select") else "미분류"
         
-        # '타임라인' 및 '상태' 추출
+        # '타임라인' 추출: 키 에러를 방지하기 위해 .get()을 사용하여 안전하게 추출합니다.
         end_date_obj = properties.get("타임라인", {}).get("date")
         end_date = end_date_obj["start"] if end_date_obj and "start" in end_date_obj else None
         
@@ -107,14 +110,21 @@ def process_notion_data(notion_pages: list) -> pd.DataFrame:
         processed_items.append({
             "id": item["id"],
             "이름": project_name,
-            "타임라인": end_date,
+            "타임라인": end_date, # 반드시 '타임라인' 키가 추가됨
             "상태": status,
             "구분": item_type,
             "상위 항목 ID": parent_id,
         })
     
     df = pd.DataFrame(processed_items)
-    df["타임라인"] = pd.to_datetime(df["타임라인"], errors='coerce')
+    
+    # --- Critical Fix: '타임라인' 컬럼이 존재하는지 확인 후 변환 ---
+    if '타임라인' in df.columns:
+        df["타임라인"] = pd.to_datetime(df["타임라인"], errors='coerce')
+    else:
+        # 이 시점에서는 이미 '타임라인' 컬럼이 존재해야 하지만, 혹시 모를 에러 대비
+        df['타임라인'] = pd.NaT 
+    # --- Fix End ---
     
     # 필터링 및 색상 비교를 위해 '구분'을 소문자 컬럼으로 추가
     df['구분_lower'] = df['구분'].str.lower()
@@ -132,6 +142,7 @@ def get_descendant_end_details(task_id: str, df_all_tasks_indexed: pd.DataFrame,
             except KeyError:
                 child_task = pd.DataFrame()
 
+            # '타임라인' 컬럼의 유효성 검사
             if not child_task.empty and pd.notna(child_task["타임라인"].iloc[0]):
                 descendant_details.append({
                     'date': child_task["타임라인"].iloc[0],
@@ -322,6 +333,9 @@ if __name__ == "__main__":
         st.info("Secrets를 설정해주세요.")
     else:
         # 1. 데이터 로드 (캐시 적용)
+        # Note: process_notion_data 안에서 get_page_title_by_id 호출 시 Streamlit caching 데코레이터가 
+        # 제대로 작동하지 않아 Notion API 호출이 반복될 수 있습니다. 
+        # 이 함수는 자주 변경되지 않는 데이터만 가져오도록 설계되었습니다.
         df_full_data = process_notion_data(get_notion_database_data(db_id))
 
         if not df_full_data.empty:
@@ -375,17 +389,11 @@ if __name__ == "__main__":
                 
                 # Y축 높이 동적 계산
                 num_categories = len(top_level_tasks_plot)
-                height_per_category = 80 # Y축 간격 확보를 위해 80으로 최종 조정
+                height_per_category = 80
                 min_chart_height = 250
                 dynamic_height = max(min_chart_height, num_categories * height_per_category)
 
-                # --- Plotly config 적용 ---
-                plotly_config = {
-                    'displaylogo': False,
-                    'displayModeBar': True,
-                    'responsive': True
-                }
-                
+                # Plotly config 적용
                 st.plotly_chart(chart_figure, use_container_width=True, height=dynamic_height, config=plotly_config)
             else:
                 st.warning("선택된 필터 조건에 해당하는 프로젝트가 없습니다.")
