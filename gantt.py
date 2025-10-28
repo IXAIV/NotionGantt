@@ -21,7 +21,7 @@ plotly_config = {
 }
 
 # --- 2. Notion 데이터 가져오기 (캐시 적용) ---
-@st.cache_data(ttl=600) # 10분마다 데이터를 새로고침
+# @st.cache_data(ttl=600) # 10분마다 데이터를 새로고침
 def get_notion_database_data(database_id: str) -> list:
     """
     지정된 Notion 데이터베이스에서 모든 페이지(항목) 데이터를 가져옵니다.
