@@ -30,6 +30,7 @@ def get_notion_database_data(database_id: str) -> list:
 
     while True:
         try:
+            # API 호출 경로 자체는 올바름. 오류 시 라이브러리 업데이트 필요.
             response = notion.databases.query(
                 database_id=database_id,
                 start_cursor=start_cursor,
@@ -42,7 +43,6 @@ def get_notion_database_data(database_id: str) -> list:
                 break
             start_cursor = response["next_cursor"]
         except Exception as e:
-            # 이 오류는 notion-client 버전 문제이므로, 사용자에게 업데이트를 요청합니다.
             st.error(f"Notion 데이터 로드 중 오류가 발생했습니다: {e}")
             return []
     return all_results
@@ -71,7 +71,7 @@ def process_notion_data(notion_pages: list) -> pd.DataFrame:
     for item in notion_pages:
         properties = item.get("properties", {})
 
-        # '이름' 속성 추출
+        # 1. '이름' 속성 추출
         name_prop = properties.get("이름", {}).get("title", [])
         project_name = name_prop[0]["plain_text"] if name_prop else "이름 없음"
 
@@ -110,27 +110,30 @@ def process_notion_data(notion_pages: list) -> pd.DataFrame:
             "이름": project_name,
             "타임라인": end_date,
             "상태": status,
-            "구분": item_type, # <-- '구분' 키가 항상 존재함을 보장
+            "구분": item_type, 
             "상위 항목 ID": parent_id,
         })
     
     df = pd.DataFrame(processed_items)
     
-    # 4. DataFrame 변환 및 컬럼 보장 (KeyError 방지)
+    # 4. DataFrame 후처리 및 Key Error 방지
     
-    # Critical Fix: '타임라인' 컬럼이 존재함을 가정하고 변환
-    if '타임라인' in df.columns:
-        df["타임라인"] = pd.to_datetime(df["타임라인"], errors='coerce')
+    # '타임라인' 컬럼이 없으면 NaT로 초기화 (KeyError 방지)
+    if '타임라인' not in df.columns:
+         df['타임라인'] = pd.NaT 
     else:
-        df['타임라인'] = pd.NaT 
+         df["타임라인"] = pd.to_datetime(df["타임라인"], errors='coerce')
 
-    # Key Error 방지: '구분' 컬럼이 존재함을 가정하고 소문자 변환 수행
-    # '구분' 컬럼은 processed_items에서 보장되므로, 이 부분이 이제 안전합니다.
+    # '구분' 컬럼이 없으면 '미분류'로 초기화 (KeyError 방지)
+    if '구분' not in df.columns:
+        df['구분'] = '미분류'
+
+    # '구분' 컬럼이 보장되므로 이제 안전하게 소문자로 변환
     df['구분_lower'] = df['구분'].str.lower()
 
     return df
 
-# --- 5. 하위 태스크 데이터 수집 ---
+# --- 5. 하위 태스크 데이터 수집 (로직 변경 없음) ---
 def get_descendant_end_details(task_id: str, df_all_tasks_indexed: pd.DataFrame, parent_child_map: dict) -> list:
     descendant_details = []
     
@@ -151,14 +154,12 @@ def get_descendant_end_details(task_id: str, df_all_tasks_indexed: pd.DataFrame,
             
     return descendant_details
 
-# --- 6. 타임라인 차트 생성 ---
+# --- 6. 타임라인 차트 생성 (로직 변경 없음) ---
 def create_timeline_chart(df_filtered: pd.DataFrame, df_full_data: pd.DataFrame) -> go.Figure:
-    """
-    필터링된 데이터를 사용하여 타임라인 차트를 생성하고, 최상위 항목의 '구분'에 따라 색상을 적용합니다.
-    """
+    
     top_level_tasks = df_filtered[df_filtered["상위 항목 ID"].isnull()].copy()
     
-    # --- 정렬 순서 수정: project > project/poc hybrid > poc 순 ---
+    # --- 정렬 순서 ---
     def get_sort_key(item_type):
         if item_type == 'project':
             return 0
@@ -198,7 +199,7 @@ def create_timeline_chart(df_filtered: pd.DataFrame, df_full_data: pd.DataFrame)
     y_axis_spacing_factor = 60.0 
     y_axis_map = {name: i * y_axis_spacing_factor for i, name in enumerate(top_level_tasks["이름"].tolist())}
     y_tickvals = list(y_axis_map.values())
-    y_ticktext = list(top_level_tasks["이름"].tolist()) # Y축 텍스트는 정렬된 이름 목록
+    y_ticktext = list(top_level_tasks["이름"].tolist()) 
     y_range_min = y_tickvals[-1] + y_axis_spacing_factor * 0.5 if y_tickvals else 1.0
     y_range_max = y_tickvals[0] - y_axis_spacing_factor * 0.5 if y_tickvals else 0.0
     
@@ -334,6 +335,7 @@ if __name__ == "__main__":
 
         if not df_full_data.empty:
             # '구분' 컬럼의 고유 값 추출 및 소문자 변환
+            # NOTE: df_full_data['구분'] 컬럼은 이제 항상 존재합니다.
             unique_types = df_full_data['구분'].str.lower().unique()
             all_types = sorted([t for t in unique_types if t not in ['미분류', None, '']])
             
