@@ -42,7 +42,7 @@ def get_notion_database_data(database_id: str) -> list:
                 break
             start_cursor = response["next_cursor"]
         except Exception as e:
-            # 이 오류는 보통 notion-client 버전 문제이므로, 사용자에게 업데이트를 요청합니다.
+            # 이 오류는 notion-client 버전 문제이므로, 사용자에게 업데이트를 요청합니다.
             st.error(f"Notion 데이터 로드 중 오류가 발생했습니다: {e}")
             return []
     return all_results
@@ -71,7 +71,7 @@ def process_notion_data(notion_pages: list) -> pd.DataFrame:
     for item in notion_pages:
         properties = item.get("properties", {})
 
-        # 1. '이름' 속성 추출
+        # '이름' 속성 추출
         name_prop = properties.get("이름", {}).get("title", [])
         project_name = name_prop[0]["plain_text"] if name_prop else "이름 없음"
 
@@ -110,21 +110,22 @@ def process_notion_data(notion_pages: list) -> pd.DataFrame:
             "이름": project_name,
             "타임라인": end_date,
             "상태": status,
-            "구분": item_type, # <-- 이 키는 항상 존재합니다.
+            "구분": item_type, # <-- '구분' 키가 항상 존재함을 보장
             "상위 항목 ID": parent_id,
         })
     
     df = pd.DataFrame(processed_items)
     
     # 4. DataFrame 변환 및 컬럼 보장 (KeyError 방지)
-    # '타임라인' 컬럼이 존재함을 가정하고 datetime 변환 수행
+    
+    # Critical Fix: '타임라인' 컬럼이 존재함을 가정하고 변환
     if '타임라인' in df.columns:
         df["타임라인"] = pd.to_datetime(df["타임라인"], errors='coerce')
     else:
-        # 이 분기가 실행되면 데이터 로드에 심각한 문제가 있는 것 (타임라인 속성 없음)
         df['타임라인'] = pd.NaT 
 
-    # '구분' 컬럼은 processed_items에서 보장되었으므로 이제 안전하게 소문자로 변환 가능
+    # Key Error 방지: '구분' 컬럼이 존재함을 가정하고 소문자 변환 수행
+    # '구분' 컬럼은 processed_items에서 보장되므로, 이 부분이 이제 안전합니다.
     df['구분_lower'] = df['구분'].str.lower()
 
     return df
@@ -157,7 +158,7 @@ def create_timeline_chart(df_filtered: pd.DataFrame, df_full_data: pd.DataFrame)
     """
     top_level_tasks = df_filtered[df_filtered["상위 항목 ID"].isnull()].copy()
     
-    # --- 정렬 순서 수정 ---
+    # --- 정렬 순서 수정: project > project/poc hybrid > poc 순 ---
     def get_sort_key(item_type):
         if item_type == 'project':
             return 0
@@ -197,7 +198,7 @@ def create_timeline_chart(df_filtered: pd.DataFrame, df_full_data: pd.DataFrame)
     y_axis_spacing_factor = 60.0 
     y_axis_map = {name: i * y_axis_spacing_factor for i, name in enumerate(top_level_tasks["이름"].tolist())}
     y_tickvals = list(y_axis_map.values())
-    y_ticktext = list(y_axis_map.keys())
+    y_ticktext = list(top_level_tasks["이름"].tolist()) # Y축 텍스트는 정렬된 이름 목록
     y_range_min = y_tickvals[-1] + y_axis_spacing_factor * 0.5 if y_tickvals else 1.0
     y_range_max = y_tickvals[0] - y_axis_spacing_factor * 0.5 if y_tickvals else 0.0
     
