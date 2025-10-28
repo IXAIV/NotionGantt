@@ -8,7 +8,6 @@ from datetime import timedelta
 
 # --- 1. 설정 및 초기화 ---
 # Streamlit Secrets에서 API 토큰과 DB ID를 안전하게 가져옵니다.
-
 notion_token = st.secrets["NOTION_TOKEN"]
 db_id = st.secrets["DATABASE_ID"]
 
@@ -20,9 +19,9 @@ notion = Client(auth=notion_token)
 
 # Plotly 설정 (경고 제거 및 기본 설정)
 plotly_config = {
-    'displaylogo': False,  # Plotly 로고 숨기기
-    'displayModeBar': True, # 차트 상단 툴바 표시
-    'responsive': True     # 반응형 크기 조정
+    'displaylogo': False,
+    'displayModeBar': True,
+    'responsive': True
 }
 
 # --- 2. Notion 데이터 가져오기 (캐시 적용) ---
@@ -34,8 +33,6 @@ def get_notion_database_data(database_id: str) -> list:
 
     while True:
         try:
-            # NOTE: notion.databases.query()는 올바른 호출 방식입니다. 
-            # 환경 문제로 오류가 나면 requirements.txt에 notion-client 최신 버전을 명시해야 합니다.
             response = notion.databases.query(
                 database_id=database_id,
                 start_cursor=start_cursor,
@@ -54,7 +51,7 @@ def get_notion_database_data(database_id: str) -> list:
 
 # --- 3. Project DB 이름 조회 함수 ---
 def get_page_title_by_id(page_id: str) -> str:
-    """페이지 ID를 사용하여 해당 페이지의 제목을 조회합니다."""
+    """페이지 ID를 사용하여 해당 페이지의 제목을 조회합니다. 제목 속성(Title type)을 찾아 반환합니다."""
     try:
         page = notion.pages.retrieve(page_id=page_id)
         for prop_name, prop_data in page["properties"].items():
@@ -65,20 +62,20 @@ def get_page_title_by_id(page_id: str) -> str:
     except Exception:
         return "이름 없음"
 
-# --- 4. Notion 데이터 가공 ---
+# --- 4. Notion 데이터 가공 (예외 처리 강화) ---
 @st.cache_data(ttl=600)
 def process_notion_data(notion_pages: list) -> pd.DataFrame:
     """
     가져온 Notion 페이지 데이터를 Pandas DataFrame으로 가공합니다.
-    - '타임라인' 컬럼이 반드시 존재하도록 보장합니다.
+    - 모든 속성 추출 시 비어있거나 타입이 맞지 않아도 안전하게 처리합니다.
     """
     processed_items = []
     for item in notion_pages:
         properties = item.get("properties", {})
 
-        # '이름' 속성 추출
+        # 1. '이름' 속성 추출 (Title 타입)
         name_prop = properties.get("이름", {}).get("title", [])
-        project_name = name_prop[0]["plain_text"] if name_prop else "이름 없음"
+        project_name = name_prop[0]["plain_text"] if name_prop else "이름 없음" # None 대신 문자열 기본값 사용
 
         # '상위 항목' 관계 속성 추출
         parent_relation_prop = properties.get("상위 항목", {}).get("relation", [])
@@ -91,26 +88,31 @@ def process_notion_data(notion_pages: list) -> pd.DataFrame:
                 project_db_id = project_db_relation[0]["id"]
                 project_name = get_page_title_by_id(project_db_id) 
 
-        if project_name == "이름 없음": continue
+        if project_name == "이름 없음": continue # 이름이 없으면 스킵
 
-        # '구분' 속성 추출 및 안전 처리
+        # 2. '구분' 속성 추출 및 안전 처리 (Select 타입)
         item_type = "미분류"
         type_prop = properties.get("구분") 
         if type_prop and type_prop.get("type") == "select":
             item_type = type_prop.get("select", {}).get("name") if type_prop.get("select") else "미분류"
         
-        # '타임라인' 추출: 키 에러를 방지하기 위해 .get()을 사용하여 안전하게 추출합니다.
+        # 3. '타임라인' 속성 추출 (Date 타입)
+        # 타임라인이 비어있으면 None으로 처리되어, Pandas 변환 시 NaT로 처리됩니다. (안전)
         end_date_obj = properties.get("타임라인", {}).get("date")
         end_date = end_date_obj["start"] if end_date_obj and "start" in end_date_obj else None
         
+        # 4. '상태' 속성 추출 (Status 또는 Select 타입)
         status_prop = properties.get("진행 상태", {})
-        status = status_prop.get("status", {}).get("name") if status_prop.get("type") == "status" else \
-                 status_prop.get("select", {}).get("name") if status_prop.get("type") == "select" else "미정"
+        status = "미정"
+        if status_prop.get("type") == "status" and status_prop.get("status"):
+            status = status_prop["status"].get("name", "미정")
+        elif status_prop.get("type") == "select" and status_prop.get("select"):
+            status = status_prop["select"].get("name", "미정")
 
         processed_items.append({
             "id": item["id"],
             "이름": project_name,
-            "타임라인": end_date, # 반드시 '타임라인' 키가 추가됨
+            "타임라인": end_date,
             "상태": status,
             "구분": item_type,
             "상위 항목 ID": parent_id,
@@ -118,15 +120,12 @@ def process_notion_data(notion_pages: list) -> pd.DataFrame:
     
     df = pd.DataFrame(processed_items)
     
-    # --- Critical Fix: '타임라인' 컬럼이 존재하는지 확인 후 변환 ---
+    # Critical: '타임라인' 컬럼이 존재하도록 보장 후 변환
     if '타임라인' in df.columns:
         df["타임라인"] = pd.to_datetime(df["타임라인"], errors='coerce')
     else:
-        # 이 시점에서는 이미 '타임라인' 컬럼이 존재해야 하지만, 혹시 모를 에러 대비
         df['타임라인'] = pd.NaT 
-    # --- Fix End ---
     
-    # 필터링 및 색상 비교를 위해 '구분'을 소문자 컬럼으로 추가
     df['구분_lower'] = df['구분'].str.lower()
     
     return df
@@ -142,8 +141,11 @@ def get_descendant_end_details(task_id: str, df_all_tasks_indexed: pd.DataFrame,
             except KeyError:
                 child_task = pd.DataFrame()
 
-            # '타임라인' 컬럼의 유효성 검사
-            if not child_task.empty and pd.notna(child_task["타임라인"].iloc[0]):
+            # 유효성 검사 (타임라인, 이름, 상태가 유효할 때만 추가)
+            if (not child_task.empty and 
+                pd.notna(child_task["타임라인"].iloc[0]) and
+                child_task["이름"].iloc[0] != "이름 없음" and
+                child_task["상태"].iloc[0] != "미정" ):
                 descendant_details.append({
                     'date': child_task["타임라인"].iloc[0],
                     'name': child_task["이름"].iloc[0],
@@ -333,9 +335,6 @@ if __name__ == "__main__":
         st.info("Secrets를 설정해주세요.")
     else:
         # 1. 데이터 로드 (캐시 적용)
-        # Note: process_notion_data 안에서 get_page_title_by_id 호출 시 Streamlit caching 데코레이터가 
-        # 제대로 작동하지 않아 Notion API 호출이 반복될 수 있습니다. 
-        # 이 함수는 자주 변경되지 않는 데이터만 가져오도록 설계되었습니다.
         df_full_data = process_notion_data(get_notion_database_data(db_id))
 
         if not df_full_data.empty:
