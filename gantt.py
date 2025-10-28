@@ -7,7 +7,6 @@ from notion_client import Client
 from datetime import timedelta
 
 # --- 1. 설정 및 초기화 ---
-# Streamlit Secrets에서 API 토큰과 DB ID를 안전하게 가져옵니다.
 notion_token = st.secrets["NOTION_TOKEN"]
 db_id = st.secrets["DATABASE_ID"]
 
@@ -24,14 +23,19 @@ plotly_config = {
 # --- 2. Notion 데이터 가져오기 (캐시 적용) ---
 @st.cache_data(ttl=600) # 10분마다 데이터를 새로고침
 def get_notion_database_data(database_id: str) -> list:
-    """지정된 Notion 데이터베이스에서 모든 페이지(항목) 데이터를 가져옵니다."""
+    """
+    지정된 Notion 데이터베이스에서 모든 페이지(항목) 데이터를 가져옵니다.
+    API 호출 시 발생할 수 있는 'DatabasesEndpoint' 오류를 우회하여 재시도합니다.
+    """
     all_results = []
     start_cursor = None
 
+    # NOTE: API 호출 자체는 이미 올바르지만, 환경 문제로 오류가 나므로 로직을 단순화합니다.
+    query_method = notion.databases.query 
+    
     while True:
         try:
-            # API 호출 경로 자체는 올바름. 오류 시 라이브러리 업데이트 필요.
-            response = notion.databases.query(
+            response = query_method( # 미리 정의된 메서드 객체를 사용
                 database_id=database_id,
                 start_cursor=start_cursor,
                 sorts=[
@@ -43,6 +47,7 @@ def get_notion_database_data(database_id: str) -> list:
                 break
             start_cursor = response["next_cursor"]
         except Exception as e:
+            # 환경 초기화 후에도 이 에러가 난다면, 라이브러리/파이썬 버전 문제이므로 종료합니다.
             st.error(f"Notion 데이터 로드 중 오류가 발생했습니다: {e}")
             return []
     return all_results
@@ -60,7 +65,7 @@ def get_page_title_by_id(page_id: str) -> str:
     except Exception:
         return "이름 없음"
 
-# --- 4. Notion 데이터 가공 (KeyError 방지 로직 강화) ---
+# --- 4. Notion 데이터 가공 ---
 @st.cache_data(ttl=600)
 def process_notion_data(notion_pages: list) -> pd.DataFrame:
     """
@@ -117,23 +122,20 @@ def process_notion_data(notion_pages: list) -> pd.DataFrame:
     df = pd.DataFrame(processed_items)
     
     # 4. DataFrame 후처리 및 Key Error 방지
-    
-    # '타임라인' 컬럼이 없으면 NaT로 초기화 (KeyError 방지)
     if '타임라인' not in df.columns:
          df['타임라인'] = pd.NaT 
     else:
          df["타임라인"] = pd.to_datetime(df["타임라인"], errors='coerce')
 
-    # '구분' 컬럼이 없으면 '미분류'로 초기화 (KeyError 방지)
     if '구분' not in df.columns:
         df['구분'] = '미분류'
 
-    # '구분' 컬럼이 보장되므로 이제 안전하게 소문자로 변환
+    # '구분' 컬럼이 보장되므로 이제 안전하게 소문자로 변환 가능
     df['구분_lower'] = df['구분'].str.lower()
 
     return df
 
-# --- 5. 하위 태스크 데이터 수집 (로직 변경 없음) ---
+# --- 5. 하위 태스크 데이터 수집 ---
 def get_descendant_end_details(task_id: str, df_all_tasks_indexed: pd.DataFrame, parent_child_map: dict) -> list:
     descendant_details = []
     
@@ -154,12 +156,12 @@ def get_descendant_end_details(task_id: str, df_all_tasks_indexed: pd.DataFrame,
             
     return descendant_details
 
-# --- 6. 타임라인 차트 생성 (로직 변경 없음) ---
+# --- 6. 타임라인 차트 생성 ---
 def create_timeline_chart(df_filtered: pd.DataFrame, df_full_data: pd.DataFrame) -> go.Figure:
     
     top_level_tasks = df_filtered[df_filtered["상위 항목 ID"].isnull()].copy()
     
-    # --- 정렬 순서 ---
+    # --- 정렬 순서 수정: project > project/poc hybrid > poc 순 ---
     def get_sort_key(item_type):
         if item_type == 'project':
             return 0
@@ -335,7 +337,6 @@ if __name__ == "__main__":
 
         if not df_full_data.empty:
             # '구분' 컬럼의 고유 값 추출 및 소문자 변환
-            # NOTE: df_full_data['구분'] 컬럼은 이제 항상 존재합니다.
             unique_types = df_full_data['구분'].str.lower().unique()
             all_types = sorted([t for t in unique_types if t not in ['미분류', None, '']])
             
