@@ -20,39 +20,34 @@ plotly_config = {
     'responsive': True
 }
 
-# --- 2. Notion 데이터 가져오기 (캐시 적용) ---
-# @st.cache_data(ttl=600) # 10분마다 데이터를 새로고침
+# --- 2. Notion 데이터 가져오기 (캐시 제거) ---
+# @st.cache_data 데코레이터를 제거했습니다. (AttributeError 방지)
 def get_notion_database_data(database_id: str) -> list:
-    """
-    지정된 Notion 데이터베이스에서 모든 페이지(항목) 데이터를 가져옵니다.
-    API 호출 시 발생할 수 있는 'DatabasesEndpoint' 오류를 우회하여 재시도합니다.
-    """
+    """지정된 Notion 데이터베이스에서 모든 페이지(항목) 데이터를 가져옵니다."""
     all_results = []
     start_cursor = None
 
-    # NOTE: API 호출 자체는 이미 올바르지만, 환경 문제로 오류가 나므로 로직을 단순화합니다.
-    query_method = notion.databases.query 
-    
     while True:
         try:
-            response = query_method( # 미리 정의된 메서드 객체를 사용
+            # --- 수정된 부분: 메서드를 직접 호출하여 오류 우회 ---
+            response = notion.databases.query(
                 database_id=database_id,
                 start_cursor=start_cursor,
                 sorts=[
                     {"property": "이름", "direction": "ascending"}
                 ]
             )
+            # --- 수정 끝 ---
             all_results.extend(response["results"])
             if not response["has_more"]:
                 break
             start_cursor = response["next_cursor"]
         except Exception as e:
-            # 환경 초기화 후에도 이 에러가 난다면, 라이브러리/파이썬 버전 문제이므로 종료합니다.
             st.error(f"Notion 데이터 로드 중 오류가 발생했습니다: {e}")
             return []
     return all_results
 
-# --- 3. Project DB 이름 조회 함수 ---
+# --- 3. Project DB 이름 조회 함수 (변경 없음) ---
 def get_page_title_by_id(page_id: str) -> str:
     """페이지 ID를 사용하여 해당 페이지의 제목을 조회합니다."""
     try:
@@ -65,7 +60,7 @@ def get_page_title_by_id(page_id: str) -> str:
     except Exception:
         return "이름 없음"
 
-# --- 4. Notion 데이터 가공 ---
+# --- 4. Notion 데이터 가공 (변경 없음) ---
 @st.cache_data(ttl=600)
 def process_notion_data(notion_pages: list) -> pd.DataFrame:
     """
@@ -76,15 +71,12 @@ def process_notion_data(notion_pages: list) -> pd.DataFrame:
     for item in notion_pages:
         properties = item.get("properties", {})
 
-        # 1. '이름' 속성 추출
         name_prop = properties.get("이름", {}).get("title", [])
         project_name = name_prop[0]["plain_text"] if name_prop else "이름 없음"
 
-        # '상위 항목' 관계 속성 추출
         parent_relation_prop = properties.get("상위 항목", {}).get("relation", [])
         parent_id = parent_relation_prop[0]["id"] if parent_relation_prop else None
         
-        # 최상위 항목 이름 대체 로직
         if parent_id is None:
             project_db_relation = properties.get("🏠 Project DB", {}).get("relation", [])
             if project_db_relation:
@@ -93,13 +85,11 @@ def process_notion_data(notion_pages: list) -> pd.DataFrame:
 
         if project_name == "이름 없음": continue
 
-        # 2. '구분' 속성 추출 및 안전 처리 (Select 타입)
         item_type = "미분류"
         type_prop = properties.get("구분") 
         if type_prop and type_prop.get("type") == "select":
             item_type = type_prop.get("select", {}).get("name") if type_prop.get("select") else "미분류"
         
-        # 3. '타임라인' 및 '상태' 추출 (안전 처리)
         end_date_obj = properties.get("타임라인", {}).get("date")
         end_date = end_date_obj["start"] if end_date_obj and "start" in end_date_obj else None
         
@@ -121,7 +111,6 @@ def process_notion_data(notion_pages: list) -> pd.DataFrame:
     
     df = pd.DataFrame(processed_items)
     
-    # 4. DataFrame 후처리 및 Key Error 방지
     if '타임라인' not in df.columns:
          df['타임라인'] = pd.NaT 
     else:
@@ -130,12 +119,11 @@ def process_notion_data(notion_pages: list) -> pd.DataFrame:
     if '구분' not in df.columns:
         df['구분'] = '미분류'
 
-    # '구분' 컬럼이 보장되므로 이제 안전하게 소문자로 변환 가능
     df['구분_lower'] = df['구분'].str.lower()
 
     return df
 
-# --- 5. 하위 태스크 데이터 수집 ---
+# --- 5. 하위 태스크 데이터 수집 (변경 없음) ---
 def get_descendant_end_details(task_id: str, df_all_tasks_indexed: pd.DataFrame, parent_child_map: dict) -> list:
     descendant_details = []
     
@@ -156,7 +144,7 @@ def get_descendant_end_details(task_id: str, df_all_tasks_indexed: pd.DataFrame,
             
     return descendant_details
 
-# --- 6. 타임라인 차트 생성 ---
+# --- 6. 타임라인 차트 생성 (변경 없음) ---
 def create_timeline_chart(df_filtered: pd.DataFrame, df_full_data: pd.DataFrame) -> go.Figure:
     
     top_level_tasks = df_filtered[df_filtered["상위 항목 ID"].isnull()].copy()
