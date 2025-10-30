@@ -15,8 +15,8 @@ db_id = st.secrets["DATABASE_ID"]
 st.set_page_config(layout="wide", page_title="프로젝트 마일스톤 타임라인")
 
 # Notion API 클라이언트 인스턴스를 인증 토큰으로 초기화합니다.
-notion = Client(auth=notion_token)
-
+notion_client_instance = Client(auth=notion_token)
+st.sidebar.markdown(f"**Notion Client Type:** `{type(notion_client_instance)}`")
 # --- 2. Notion 데이터 가져오기 (캐시 적용) ---
 @st.cache_data(ttl=600) # 10분마다 데이터를 새로고침
 def get_notion_database_data(database_id: str) -> list:
@@ -26,7 +26,7 @@ def get_notion_database_data(database_id: str) -> list:
 
     while True:
         try:
-            response = notion.databases.query(
+            response = notion_client_instance.databases.query(
                 database_id=database_id,
                 start_cursor=start_cursor,
                 sorts=[
@@ -46,7 +46,7 @@ def get_notion_database_data(database_id: str) -> list:
 def get_page_title_by_id(page_id: str) -> str:
     """페이지 ID를 사용하여 해당 페이지의 제목을 조회합니다. 제목 속성(Title type)을 찾아 반환합니다."""
     try:
-        page = notion.pages.retrieve(page_id=page_id)
+        page = notion_client_instance.pages.retrieve(page_id=page_id)
         for prop_name, prop_data in page["properties"].items():
             if prop_data.get("type") == "title":
                 title_prop = prop_data.get("title", [])
