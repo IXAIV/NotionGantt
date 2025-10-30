@@ -108,6 +108,11 @@ def process_notion_data(notion_pages: list) -> pd.DataFrame:
         })
     
     df = pd.DataFrame(processed_items)
+    if "타임라인" not in df.columns:
+        st.error("⚠️ 데이터베이스에서 '타임라인' 속성을 찾을 수 없습니다.")
+        st.caption(f"Notion API가 반환한 실제 컬럼 목록: {df.columns.tolist()}")
+        st.stop() # 앱 실행을 중단하여 더 이상 에러가 발생하지 않게 합니다.
+        
     df["타임라인"] = pd.to_datetime(df["타임라인"], errors='coerce')
     
     # 필터링 및 색상 비교를 위해 '구분'을 소문자 컬럼으로 추가
