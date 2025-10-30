@@ -56,7 +56,7 @@ def get_page_title_by_id(page_id: str) -> str:
         return "이름 없음"
 
 # --- 4. Notion 데이터 가공 ---
-@st.cache_data(ttl=600)
+# @st.cache_data(ttl=600)
 def process_notion_data(notion_pages: list) -> pd.DataFrame:
     """
     가져온 Notion 페이지 데이터를 Pandas DataFrame으로 가공합니다.
