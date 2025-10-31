@@ -14,16 +14,21 @@ db_id = st.secrets["DATABASE_ID"]
 # Streamlit 앱 페이지의 기본 설정을 지정합니다.
 st.set_page_config(layout="wide", page_title="프로젝트 마일스톤 타임라인")
 
-# Notion API 클라이언트 인스턴스를 인증 토큰으로 초기화합니다.
-notion_client_instance = Client(auth=notion_token)
-st.sidebar.markdown(f"**Notion Client Type:** `{type(notion_client_instance)}`")
+if 'notion_client' not in st.session_state:
+    try:
+        st.session_state.notion_client = Client(auth=notion_token)
+    except Exception as e:
+        st.error(f"Notion 클라이언트 초기화 중 오류가 발생했습니다: {e}")
+        st.stop()
+
 # --- 2. Notion 데이터 가져오기 (캐시 적용) ---
 @st.cache_data(ttl=600) # 10분마다 데이터를 새로고침
 def get_notion_database_data(database_id: str) -> list:
     """지정된 Notion 데이터베이스에서 모든 페이지(항목) 데이터를 가져옵니다."""
     all_results = []
     start_cursor = None
-
+    notion_client_instance = st.session_state.notion_client
+    
     while True:
         try:
             response = notion_client_instance.databases.query(
@@ -38,13 +43,14 @@ def get_notion_database_data(database_id: str) -> list:
                 break
             start_cursor = response["next_cursor"]
         except Exception as e:
-            st.error(f"Notion 데이터 로드 중 오류가 발생했습니다: {e}")
+            st.error("❌ Notion 데이터베이스 접근 실패 (API Error)")
+            st.exception(e)
             return []
     return all_results
 
 # --- 3. Project DB 이름 조회 함수 ---
 def get_page_title_by_id(page_id: str) -> str:
-    """페이지 ID를 사용하여 해당 페이지의 제목을 조회합니다. 제목 속성(Title type)을 찾아 반환합니다."""
+    notion_client_instance = st.session_state.notion_client
     try:
         page = notion_client_instance.pages.retrieve(page_id=page_id)
         for prop_name, prop_data in page["properties"].items():
