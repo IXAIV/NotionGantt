@@ -1,4 +1,4 @@
 streamlit
 pandas
 plotly
-notion-client>=2.1.0
+notion-client
