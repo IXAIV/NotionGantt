@@ -27,25 +27,41 @@ def get_notion_database_data(database_id: str) -> list:
     """지정된 Notion 데이터베이스에서 모든 페이지(항목) 데이터를 가져옵니다."""
     all_results = []
     start_cursor = None
-    notion_client_instance = st.session_state.notion_client
+    try:
+        notion_client_instance = st.session_state.notion_client 
+    except AttributeError:
+        st.error("Notion 클라이언트가 세션 상태에 올바르게 초기화되지 않았습니다.")
+        return [] 
     
     while True:
         try:
-            response = notion_client_instance.databases.query(
-                database_id=database_id,
-                start_cursor=start_cursor,
-                sorts=[
-                    {"property": "이름", "direction": "ascending"}
-                ]
+            # 💡 문제가 되는 .databases.query 대신 로우레벨 request() 사용
+            path = f"databases/{database_id}/query"
+            payload = {
+                "sorts": [{"property": "이름", "direction": "ascending"}]
+            }
+            if start_cursor:
+                 payload["start_cursor"] = start_cursor
+
+            response = notion_client_instance.request(
+                path=path,
+                method="POST",
+                body=payload,
             )
+            
             all_results.extend(response["results"])
+            
             if not response["has_more"]:
                 break
+            
             start_cursor = response["next_cursor"]
+            
         except Exception as e:
-            st.error("❌ Notion 데이터베이스 접근 실패 (API Error)")
-            st.exception(e)
+            # 이전 디버깅 코드 유지
+            st.error("❌ Notion 데이터 로드 중 오류가 발생했습니다. 권한 또는 DB ID 확인.")
+            st.exception(e) # 구체적인 API 에러 메시지(예: 404 Not Found, 401 Unauthorized)를 확인합니다.
             return []
+            
     return all_results
 
 # --- 3. Project DB 이름 조회 함수 ---
