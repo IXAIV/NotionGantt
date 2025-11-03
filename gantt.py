@@ -25,6 +25,12 @@ if 'notion_client' not in st.session_state:
 @st.cache_data(ttl=600) # 10분마다 데이터를 새로고침
 def get_notion_database_data(database_id: str) -> list:
     """지정된 Notion 데이터베이스에서 모든 페이지(항목) 데이터를 가져옵니다."""
+
+    st.sidebar.caption(f"DB ID 확인: {database_id}")
+    if not database_id or len(database_id) < 30:
+        st.error("DATABASE_ID가 유효하지 않은 형식으로 보입니다. Secrets을 확인해 주세요.")
+        return []
+    
     all_results = []
     start_cursor = None
     try:
@@ -37,6 +43,7 @@ def get_notion_database_data(database_id: str) -> list:
         try:
             # 💡 문제가 되는 .databases.query 대신 로우레벨 request() 사용
             path = f"databases/{database_id}/query"
+            st.sidebar.caption(f"요청 경로: {path}") # 🚨 최종 경로 확인
             payload = {
                 "sorts": [{"property": "이름", "direction": "ascending"}]
             }
