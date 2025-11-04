@@ -28,11 +28,7 @@ if 'notion_client' not in st.session_state:
 
 # --- 2. Notion 데이터 가져오기 (캐시 적용) ---
 @st.cache_data(ttl=600) # 10분마다 데이터를 새로고침
-import requests # 상단 import 목록에 추가
 
-# Notion API의 기본 URL과 헤더 정보를 함수 외부에서 정의하거나 함수 내에서 사용합니다.
-NOTION_API_URL = "https://api.notion.com/v1"
-NOTION_VERSION = "2022-06-28" # Notion API 버전 (필수)
 
 # --- 2. Notion 데이터 가져오기 (requests 직접 사용으로 수정) ---
 @st.cache_data(ttl=600)
