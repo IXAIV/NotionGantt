@@ -5,40 +5,52 @@ import plotly.graph_objects as go
 import plotly.express as px
 from notion_client import Client
 from datetime import timedelta
-import requests # 상단 import 목록에 추가
+import requests
 
-# Notion API의 기본 URL과 헤더 정보를 함수 외부에서 정의하거나 함수 내에서 사용합니다.
+# --- 상수 정의 (Notion API 직접 호출용) ---
 NOTION_API_URL = "https://api.notion.com/v1"
-NOTION_VERSION = "2022-06-28" # Notion API 버전 (필수)
+NOTION_VERSION = "2022-06-28" 
+# Notion API 버전. 이 값을 사용하시면 됩니다.
 
 # --- 1. 설정 및 초기화 ---
 # Streamlit Secrets에서 API 토큰과 DB ID를 안전하게 가져옵니다.
-notion_token = st.secrets["NOTION_TOKEN"]
-db_id = st.secrets["DATABASE_ID"]
+notion_token = st.secrets.get("NOTION_TOKEN")
+db_id = st.secrets.get("DATABASE_ID")
 
 # Streamlit 앱 페이지의 기본 설정을 지정합니다.
 st.set_page_config(layout="wide", page_title="프로젝트 마일스톤 타임라인")
 
+# Plotly 설정 (경고 제거 및 기본 설정)
+plotly_config = {
+    'displaylogo': False,
+    'displayModeBar': True,
+    'responsive': True
+}
+
+# 💡 Session State를 사용하여 Notion Client 안정적으로 초기화
+# Notion API 클라이언트 인스턴스를 세션 상태에 저장합니다.
 if 'notion_client' not in st.session_state:
-    try:
-        st.session_state.notion_client = Client(auth=notion_token)
-    except Exception as e:
-        st.error(f"Notion 클라이언트 초기화 중 오류가 발생했습니다: {e}")
-        st.stop()
+    if notion_token:
+        try:
+            # Client 객체는 pages.retrieve를 위해 필요합니다.
+            st.session_state.notion_client = Client(auth=notion_token)
+        except Exception as e:
+            st.error(f"Notion 클라이언트 초기화 중 오류가 발생했습니다: {e}")
+            # 이 경우 notion_token이 유효하지 않은 것일 수 있습니다.
+            st.session_state.notion_client = None
+    else:
+        st.session_state.notion_client = None
 
-# --- 2. Notion 데이터 가져오기 (캐시 적용) ---
+
+# --- 2. Notion 데이터 가져오기 (requests 우회) ---
 @st.cache_data(ttl=600) # 10분마다 데이터를 새로고침
-
-
-# --- 2. Notion 데이터 가져오기 (requests 직접 사용으로 수정) ---
-@st.cache_data(ttl=600)
 def get_notion_database_data(database_id: str) -> list:
     """지정된 Notion 데이터베이스에서 모든 페이지(항목) 데이터를 가져옵니다. (requests 라이브러리 직접 사용)"""
     all_results = []
     start_cursor = None
     
-    # 🚨 Secrets에서 토큰을 직접 가져와 헤더에 사용
-    notion_token = st.secrets["NOTION_TOKEN"]
+    if not notion_token or not database_id:
+        return []
 
     headers = {
         "Authorization": f"Bearer {notion_token}",
@@ -46,12 +58,8 @@ def get_notion_database_data(database_id: str) -> list:
         "Content-Type": "application/json",
     }
     
-    # 최종 요청 URL 구성
     full_url = f"{NOTION_API_URL}/databases/{database_id}/query"
     
-    # 🚨 디버깅을 위해 URL 및 ID 출력 (필요시)
-    # st.sidebar.caption(f"Final URL: {full_url}")
-
     while True:
         try:
             payload = {
@@ -81,9 +89,15 @@ def get_notion_database_data(database_id: str) -> list:
             
         except requests.exceptions.RequestException as req_e:
             # requests 라이브러리에서 발생하는 오류 처리 (네트워크, HTTP 오류 등)
-            error_details = req_e.response.json() if req_e.response.content else str(req_e)
+            status_code = req_e.response.status_code if req_e.response is not None else 'N/A'
+            error_details = req_e.response.json() if req_e.response and req_e.response.content else str(req_e)
+            
             st.error("❌ Notion 데이터 로드 중 치명적인 HTTP/API 오류 발생.")
-            st.warning(f"상태 코드: {req_e.response.status_code if req_e.response else 'N/A'}")
+            st.warning(f"상태 코드: {status_code}")
+            
+            if status_code in [401, 403]:
+                st.info("💡 권한 문제로 보입니다. Notion 통합(Integration)이 데이터베이스에 명시적으로 초대되었는지 확인해 주세요.")
+            
             st.exception(f"오류: {error_details}")
             return []
         except Exception as e:
@@ -92,10 +106,17 @@ def get_notion_database_data(database_id: str) -> list:
             return []
             
     return all_results
-# --- 3. Project DB 이름 조회 함수 ---
+
+# --- 3. Project DB 이름 조회 함수 (Notion Client 재사용) ---
 def get_page_title_by_id(page_id: str) -> str:
+    """페이지 ID를 사용하여 해당 페이지의 제목을 조회합니다. (notion-client 사용)"""
     notion_client_instance = st.session_state.notion_client
+    
+    if not notion_client_instance:
+        return "이름 없음 (클라이언트 오류)"
+        
     try:
+        # databases.query와 달리 pages.retrieve는 notion-client가 정상 작동할 가능성이 높음
         page = notion_client_instance.pages.retrieve(page_id=page_id)
         for prop_name, prop_data in page["properties"].items():
             if prop_data.get("type") == "title":
@@ -103,21 +124,27 @@ def get_page_title_by_id(page_id: str) -> str:
                 return title_prop[0]["plain_text"] if title_prop else "이름 없음"
         return "이름 없음"
     except Exception:
-        return "이름 없음"
+        # Notion API 권한 오류 시에도 안전하게 처리
+        return "이름 없음 (권한 오류)"
 
-# --- 4. Notion 데이터 가공 ---
-# @st.cache_data(ttl=600)
+# --- 4. Notion 데이터 가공 (예외 처리 강화) ---
+@st.cache_data(ttl=600)
 def process_notion_data(notion_pages: list) -> pd.DataFrame:
     """
     가져온 Notion 페이지 데이터를 Pandas DataFrame으로 가공합니다.
-    - 최상위 항목은 'Project DB' 관계를 통해 이름을 대체합니다.
-    - '구분' 속성을 안전하게 추출합니다.
     """
     processed_items = []
+    
+    # 🚨 Notion API가 반환한 실제 컬럼 목록이 비어 있으면 여기서 오류 메시지를 표시합니다.
+    # 이 오류는 이제 권한 문제가 아닌, 데이터 가공 이전의 데이터 로드 실패(get_notion_database_data)를 의미합니다.
+    if not notion_pages:
+        st.warning("Notion API로부터 가져온 데이터가 없습니다. (빈 페이지 목록)")
+        return pd.DataFrame() 
+
     for item in notion_pages:
         properties = item.get("properties", {})
 
-        # '이름' 속성 추출
+        # 1. '이름' 속성 추출 (Title 타입)
         name_prop = properties.get("이름", {}).get("title", [])
         project_name = name_prop[0]["plain_text"] if name_prop else "이름 없음"
 
@@ -134,19 +161,23 @@ def process_notion_data(notion_pages: list) -> pd.DataFrame:
 
         if project_name == "이름 없음": continue
 
-        # '구분' 속성 추출 및 안전 처리
+        # 2. '구분' 속성 추출 및 안전 처리 (Select 타입)
         item_type = "미분류"
         type_prop = properties.get("구분") 
         if type_prop and type_prop.get("type") == "select":
             item_type = type_prop.get("select", {}).get("name") if type_prop.get("select") else "미분류"
         
-        # '타임라인' 및 '상태' 추출
+        # 3. '타임라인' 속성 추출 (Date 타입)
         end_date_obj = properties.get("타임라인", {}).get("date")
         end_date = end_date_obj["start"] if end_date_obj and "start" in end_date_obj else None
         
+        # 4. '상태' 속성 추출 (Status 또는 Select 타입)
         status_prop = properties.get("진행 상태", {})
-        status = status_prop.get("status", {}).get("name") if status_prop.get("type") == "status" else \
-                 status_prop.get("select", {}).get("name") if status_prop.get("type") == "select" else "미정"
+        status = "미정"
+        if status_prop.get("type") == "status" and status_prop.get("status"):
+            status = status_prop["status"].get("name", "미정")
+        elif status_prop.get("type") == "select" and status_prop.get("select"):
+            status = status_prop["select"].get("name", "미정")
 
         processed_items.append({
             "id": item["id"],
@@ -158,19 +189,20 @@ def process_notion_data(notion_pages: list) -> pd.DataFrame:
         })
     
     df = pd.DataFrame(processed_items)
-    if "타임라인" not in df.columns:
-        st.error("⚠️ 데이터베이스에서 '타임라인' 속성을 찾을 수 없습니다.")
-        st.caption(f"Notion API가 반환한 실제 컬럼 목록: {df.columns.tolist()}")
-        st.stop() # 앱 실행을 중단하여 더 이상 에러가 발생하지 않게 합니다.
-        
-    df["타임라인"] = pd.to_datetime(df["타임라인"], errors='coerce')
     
-    # 필터링 및 색상 비교를 위해 '구분'을 소문자 컬럼으로 추가
+    # Critical: '타임라인' 컬럼이 존재하도록 보장 후 변환
+    if '타임라인' in df.columns:
+        df["타임라인"] = pd.to_datetime(df["타임라인"], errors='coerce')
+    else:
+        # 데이터가 있지만 '타임라인' 속성이 없을 경우 NaT로 채웁니다.
+        df['타임라인'] = pd.NaT 
+    
     df['구분_lower'] = df['구분'].str.lower()
     
     return df
 
-# --- 4. 하위 태스크 데이터 수집 ---
+# --- 5. 하위 태스크 데이터 수집 ---
+# (기존 코드와 동일하므로 생략하지 않고 그대로 유지)
 def get_descendant_end_details(task_id: str, df_all_tasks_indexed: pd.DataFrame, parent_child_map: dict) -> list:
     descendant_details = []
     
@@ -181,18 +213,22 @@ def get_descendant_end_details(task_id: str, df_all_tasks_indexed: pd.DataFrame,
             except KeyError:
                 child_task = pd.DataFrame()
 
-            if not child_task.empty and pd.notna(child_task["타임라인"].iloc[0]):
+            # 유효성 검사 (타임라인, 이름, 상태가 유효할 때만 추가)
+            if (not child_task.empty and 
+                pd.notna(child_task["타임라인"].iloc[0]) and
+                child_task["이름"].iloc[0] != "이름 없음" and
+                child_task["상태"].iloc[0] != "미정" ):
                 descendant_details.append({
                     'date': child_task["타임라인"].iloc[0],
                     'name': child_task["이름"].iloc[0],
                     'status': child_task["상태"].iloc[0]
                 })
-            # --- 수정된 부분: 재귀 호출 시 df_all_tasks_indexed 인수를 전달 ---
             descendant_details.extend(get_descendant_end_details(child_id, df_all_tasks_indexed, parent_child_map))
             
     return descendant_details
 
-# --- 5. 타임라인 차트 생성 ---
+# --- 6. 타임라인 차트 생성 ---
+# (기존 코드와 동일하므로 생략하지 않고 그대로 유지)
 def create_timeline_chart(df_filtered: pd.DataFrame, df_full_data: pd.DataFrame) -> go.Figure:
     """
     필터링된 데이터를 사용하여 타임라인 차트를 생성하고, 최상위 항목의 '구분'에 따라 색상을 적용합니다.
@@ -203,11 +239,11 @@ def create_timeline_chart(df_filtered: pd.DataFrame, df_full_data: pd.DataFrame)
     # --- 정렬 순서 수정: project > project/poc hybrid > poc 순 ---
     def get_sort_key(item_type):
         if item_type == 'project':
-            return 0  # project만 있는 항목 (최우선)
+            return 0 
         elif item_type == 'poc':
-            return 2  # poc만 있는 항목 (최후순)
+            return 2 
         else:
-            return 1  # 그 외 항목 (중간)
+            return 1 
     
     top_level_tasks['sort_key'] = top_level_tasks['구분_lower'].apply(get_sort_key)
     top_level_tasks = top_level_tasks.sort_values(
@@ -229,7 +265,6 @@ def create_timeline_chart(df_filtered: pd.DataFrame, df_full_data: pd.DataFrame)
 
     for _, top_task in top_level_tasks.iterrows():
         top_task_id = top_task["id"]
-        # --- 수정된 부분: df_indexed_by_id 전달 ---
         descendant_details = get_descendant_end_details(top_task_id, df_indexed_by_id, parent_child_map)
         all_descendant_end_dates.extend([d['date'] for d in descendant_details])
 
@@ -237,7 +272,7 @@ def create_timeline_chart(df_filtered: pd.DataFrame, df_full_data: pd.DataFrame)
     min_date = valid_end_dates.min() if not valid_end_dates.empty else pd.Timestamp.now() - timedelta(days=30)
     max_date = valid_end_dates.max() if not valid_end_dates.empty else pd.Timestamp.now() + timedelta(days=30)
     
-    # --- Y축 간격 확보를 위한 숫자 매핑 (간격 계수 60.0으로 재설정) ---
+    # --- Y축 간격 확보를 위한 숫자 매핑 ---
     y_axis_spacing_factor = 60.0 
     y_axis_map = {name: i * y_axis_spacing_factor for i, name in enumerate(top_level_tasks["이름"].tolist())}
     y_tickvals = list(y_axis_map.values())
@@ -282,7 +317,6 @@ def create_timeline_chart(df_filtered: pd.DataFrame, df_full_data: pd.DataFrame)
         
         label_color_map[top_task_name] = line_dot_color
         
-        # --- 수정된 부분: df_indexed_by_id 전달 ---
         descendant_details = get_descendant_end_details(top_task_id, df_indexed_by_id, parent_child_map)
         
         if descendant_details:
@@ -322,7 +356,7 @@ def create_timeline_chart(df_filtered: pd.DataFrame, df_full_data: pd.DataFrame)
                 )
             )
     
-    # --- Y축 틱 텍스트에 색상 및 왼쪽 정렬 적용 ---
+    # Y축 틱 텍스트에 색상 적용
     colored_y_ticktext = [
         f'<span style="color:{label_color_map.get(text, "gray")};">{text}</span>'
         for text in y_ticktext
@@ -347,7 +381,6 @@ def create_timeline_chart(df_filtered: pd.DataFrame, df_full_data: pd.DataFrame)
             tickformat="%Y/%m/%d",
             tickfont=dict(size=14)
         ), 
-        # Y축 라벨 폰트 크기 조정 및 자동 마진 설정
         yaxis=dict(
             showgrid=True,
             tickfont=dict(size=16), 
@@ -359,15 +392,13 @@ def create_timeline_chart(df_filtered: pd.DataFrame, df_full_data: pd.DataFrame)
             ticktext=colored_y_ticktext, 
             range=[y_range_min, y_range_max],
             fixedrange=False,
-            # Y축 라벨 간격을 늘리기 위한 최종 마진 설정
-            # automargin과 함께 l 마진을 대폭 늘려 왼쪽 공간을 확보합니다.
         ),
-        margin=dict(l=150, r=20, t=20, b=20), # 좌측 마진(l) 대폭 증가
+        margin=dict(l=150, r=20, t=20, b=20),
     )
 
     return fig, top_level_tasks
 
-# --- 6. Streamlit 앱 실행 로직 ---
+# --- 7. Streamlit 앱 실행 로직 ---
 if __name__ == "__main__":
     if not notion_token or not db_id:
         st.error("Streamlit Secrets(`NOTION_TOKEN`, `DATABASE_ID`)이 설정되지 않았습니다.")
@@ -412,7 +443,7 @@ if __name__ == "__main__":
 
             # 3. 차트 표시
             if not df_filtered.empty:
-                # Streamlit 컴포넌트 제목 표시 (좌측 정렬 및 폰트 크기 20px)
+                # Streamlit 컴포넌트 제목 표시
                 st.markdown(
                     """
                     <div style="background-color:#FFA500; color:white; padding:10px; border-radius:5px; text-align:left; font-size:20px; margin-bottom: 20px;">
@@ -425,13 +456,14 @@ if __name__ == "__main__":
                 # 필터링된 데이터를 사용하여 차트 생성
                 chart_figure, top_level_tasks_plot = create_timeline_chart(df_filtered, df_full_data) 
                 
-                # Y축 높이 동적 계산 (간격 증가에 맞춰 조정)
+                # Y축 높이 동적 계산
                 num_categories = len(top_level_tasks_plot)
-                height_per_category = 80 # Y축 간격 확보를 위해 80으로 최종 조정
+                height_per_category = 80
                 min_chart_height = 250
                 dynamic_height = max(min_chart_height, num_categories * height_per_category)
 
-                st.plotly_chart(chart_figure, use_container_width=True, height=dynamic_height)
+                # Plotly config 적용
+                st.plotly_chart(chart_figure, use_container_width=True, height=dynamic_height, config=plotly_config)
             else:
                 st.warning("선택된 필터 조건에 해당하는 프로젝트가 없습니다.")
         else:
