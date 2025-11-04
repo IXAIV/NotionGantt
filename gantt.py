@@ -178,6 +178,11 @@ def process_notion_data(notion_pages: list) -> pd.DataFrame:
             status = status_prop["status"].get("name", "미정")
         elif status_prop.get("type") == "select" and status_prop.get("select"):
             status = status_prop["select"].get("name", "미정")
+        status = "미정"
+        if status_prop.get("type") == "status" and status_prop.get("status"):
+            status = status_prop["status"].get("name", "미정")
+        elif status_prop.get("type") == "select" and status_prop.get("select"):
+            status = status_prop["select"].get("name", "미정")
 
         processed_items.append({
             "id": item["id"],
@@ -272,6 +277,7 @@ def create_timeline_chart(df_filtered: pd.DataFrame, df_full_data: pd.DataFrame)
     min_date = valid_end_dates.min() if not valid_end_dates.empty else pd.Timestamp.now() - timedelta(days=30)
     max_date = valid_end_dates.max() if not valid_end_dates.empty else pd.Timestamp.now() + timedelta(days=30)
     
+    # --- Y축 간격 확보를 위한 숫자 매핑 ---
     # --- Y축 간격 확보를 위한 숫자 매핑 ---
     y_axis_spacing_factor = 60.0 
     y_axis_map = {name: i * y_axis_spacing_factor for i, name in enumerate(top_level_tasks["이름"].tolist())}
@@ -399,6 +405,7 @@ def create_timeline_chart(df_filtered: pd.DataFrame, df_full_data: pd.DataFrame)
     return fig, top_level_tasks
 
 # --- 7. Streamlit 앱 실행 로직 ---
+# --- 7. Streamlit 앱 실행 로직 ---
 if __name__ == "__main__":
     if not notion_token or not db_id:
         st.error("Streamlit Secrets(`NOTION_TOKEN`, `DATABASE_ID`)이 설정되지 않았습니다.")
@@ -457,11 +464,15 @@ if __name__ == "__main__":
                 chart_figure, top_level_tasks_plot = create_timeline_chart(df_filtered, df_full_data) 
                 
                 # Y축 높이 동적 계산
+                # Y축 높이 동적 계산
                 num_categories = len(top_level_tasks_plot)
+                height_per_category = 80
                 height_per_category = 80
                 min_chart_height = 250
                 dynamic_height = max(min_chart_height, num_categories * height_per_category)
 
+                # Plotly config 적용
+                st.plotly_chart(chart_figure, use_container_width=True, height=dynamic_height, config=plotly_config)
                 # Plotly config 적용
                 st.plotly_chart(chart_figure, use_container_width=True, height=dynamic_height, config=plotly_config)
             else:
