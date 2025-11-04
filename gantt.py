@@ -5,6 +5,11 @@ import plotly.graph_objects as go
 import plotly.express as px
 from notion_client import Client
 from datetime import timedelta
+import requests # 상단 import 목록에 추가
+
+# Notion API의 기본 URL과 헤더 정보를 함수 외부에서 정의하거나 함수 내에서 사용합니다.
+NOTION_API_URL = "https://api.notion.com/v1"
+NOTION_VERSION = "2022-06-28" # Notion API 버전 (필수)
 
 # --- 1. 설정 및 초기화 ---
 # Streamlit Secrets에서 API 토큰과 DB ID를 안전하게 가져옵니다.
@@ -23,54 +28,74 @@ if 'notion_client' not in st.session_state:
 
 # --- 2. Notion 데이터 가져오기 (캐시 적용) ---
 @st.cache_data(ttl=600) # 10분마다 데이터를 새로고침
-def get_notion_database_data(database_id: str) -> list:
-    """지정된 Notion 데이터베이스에서 모든 페이지(항목) 데이터를 가져옵니다."""
+import requests # 상단 import 목록에 추가
 
-    st.sidebar.caption(f"DB ID 확인: {database_id}")
-    if not database_id or len(database_id) < 30:
-        st.error("DATABASE_ID가 유효하지 않은 형식으로 보입니다. Secrets을 확인해 주세요.")
-        return []
-    
+# Notion API의 기본 URL과 헤더 정보를 함수 외부에서 정의하거나 함수 내에서 사용합니다.
+NOTION_API_URL = "https://api.notion.com/v1"
+NOTION_VERSION = "2022-06-28" # Notion API 버전 (필수)
+
+# --- 2. Notion 데이터 가져오기 (requests 직접 사용으로 수정) ---
+@st.cache_data(ttl=600)
+def get_notion_database_data(database_id: str) -> list:
+    """지정된 Notion 데이터베이스에서 모든 페이지(항목) 데이터를 가져옵니다. (requests 라이브러리 직접 사용)"""
     all_results = []
     start_cursor = None
-    try:
-        notion_client_instance = st.session_state.notion_client 
-    except AttributeError:
-        st.error("Notion 클라이언트가 세션 상태에 올바르게 초기화되지 않았습니다.")
-        return [] 
     
+    # 🚨 Secrets에서 토큰을 직접 가져와 헤더에 사용
+    notion_token = st.secrets["NOTION_TOKEN"]
+
+    headers = {
+        "Authorization": f"Bearer {notion_token}",
+        "Notion-Version": NOTION_VERSION,
+        "Content-Type": "application/json",
+    }
+    
+    # 최종 요청 URL 구성
+    full_url = f"{NOTION_API_URL}/databases/{database_id}/query"
+    
+    # 🚨 디버깅을 위해 URL 및 ID 출력 (필요시)
+    # st.sidebar.caption(f"Final URL: {full_url}")
+
     while True:
         try:
-            # 💡 문제가 되는 .databases.query 대신 로우레벨 request() 사용
-            path = f"databases/{database_id}/query"
-            st.sidebar.caption(f"요청 경로: {path}") # 🚨 최종 경로 확인
             payload = {
                 "sorts": [{"property": "이름", "direction": "ascending"}]
             }
             if start_cursor:
                  payload["start_cursor"] = start_cursor
 
-            response = notion_client_instance.request(
-                path=path,
-                method="POST",
-                body=payload,
+            # requests.post를 사용하여 API에 직접 요청
+            response = requests.post(
+                full_url, 
+                headers=headers, 
+                json=payload
             )
             
-            all_results.extend(response["results"])
+            # HTTP 오류 상태 코드 확인 (400, 401, 404 등)
+            response.raise_for_status() 
             
-            if not response["has_more"]:
+            data = response.json()
+            
+            all_results.extend(data["results"])
+            
+            if not data["has_more"]:
                 break
             
-            start_cursor = response["next_cursor"]
+            start_cursor = data["next_cursor"]
             
+        except requests.exceptions.RequestException as req_e:
+            # requests 라이브러리에서 발생하는 오류 처리 (네트워크, HTTP 오류 등)
+            error_details = req_e.response.json() if req_e.response.content else str(req_e)
+            st.error("❌ Notion 데이터 로드 중 치명적인 HTTP/API 오류 발생.")
+            st.warning(f"상태 코드: {req_e.response.status_code if req_e.response else 'N/A'}")
+            st.exception(f"오류: {error_details}")
+            return []
         except Exception as e:
-            # 이전 디버깅 코드 유지
-            st.error("❌ Notion 데이터 로드 중 오류가 발생했습니다. 권한 또는 DB ID 확인.")
-            st.exception(e) # 구체적인 API 에러 메시지(예: 404 Not Found, 401 Unauthorized)를 확인합니다.
+            st.error("❌ 데이터 처리 중 일반 오류 발생.")
+            st.exception(e)
             return []
             
     return all_results
-
 # --- 3. Project DB 이름 조회 함수 ---
 def get_page_title_by_id(page_id: str) -> str:
     notion_client_instance = st.session_state.notion_client
